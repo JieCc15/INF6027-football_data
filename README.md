@@ -1,5 +1,7 @@
-INF6027 Project : This project is dedicated to analyzing football match statistics and their relationship with team success. A comprehensive overview of match data, predictive modeling, and feature importance will be shared on this page.
-This is a separate project that deals with similar data analysis methodologies. Make sure to provide a link to this repository once it is available on GitHub.
+INF6027 Project : This project is dedicated to analyzing football match statistics and their relationship with team success.
+A comprehensive overview of match data, predictive modeling, and feature importance will be shared on this page.
+This is a separate project that deals with similar data analysis methodologies. 
+Make sure to provide a link to this repository once it is available on GitHub.
 Code: Include all your scripts, such as data processing, exploratory analysis, and modeling. 
 R code files can be found here: Report.Rmd
 Instructions on Running the Code: 
