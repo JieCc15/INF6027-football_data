@@ -1,0 +1,291 @@
+---
+title: "Football Match Data Analysis"
+author: "Dar"
+date: "2025-01-12"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Data Description
+
+```{r,message=F,warning=F}
+library(ggplot2)
+library(knitr)
+library(dplyr)
+library(tidyverse)
+library(tidyr)
+library(nnet)
+library(randomForest)
+library(caret)
+matches <- read.csv("matches.csv", stringsAsFactors = FALSE)
+
+colnames(matches)
+```
+
+This dataset provides various variables containing information about football matches. By analyzing these variables, we aim to explore their meanings and answer the following questions:
+
+Q1. Is there a difference in scores between the home and away teams?
+
+Q2. When a team wins, is there always a difference in the number of shots taken by the two teams? Does the winning team consistently take more shots?
+
+Q3. Setting aside technical skills, does physical strength play an important role in football matches? In the data, this can be examined by checking whether stronger teams tend to get more shooting opportunities.
+
+Q4. Excluding physical strength, does a player’s basic technical ability impact match outcomes? This can be analyzed by studying the relationship between the passing success rate of both teams and the match result.
+
+Q5. Based on the match data, can we accurately predict the match result using a logistic regression model?
+
+To answer these questions and conduct comparative visual analyses, we identified the need for additional variables. Thus, we performed the following preprocessing steps.
+
+# Data Preprocessing
+## Adding Match Outcome Information
+```{r,message=F,warning=F}
+matches$audience <- as.numeric(gsub(",", "", matches$audience))
+
+
+matches$winner <- ifelse(matches$team1_goals > matches$team2_goals, matches$team1,
+                         ifelse(matches$team1_goals < matches$team2_goals, matches$team2, "Draw"))
+
+matches$winner_type <- ifelse(matches$winner == matches$team1, "Home",
+                              ifelse(matches$winner == matches$team2, "Away", "Draw"))
+
+kable( head(matches[, c("team1", "team2", "team1_goals", "team2_goals", "winner", "winner_type")]),caption = 'Part of adjusted data')
+```
+
+We added match outcome information (win, loss, draw) based on the scores of the two teams in each match, along with the winning team and its type (home or away), to facilitate subsequent analysis and visualization.
+
+## Convert numerical features to ratios.
+
+```{r,message=F,warning=F}
+
+
+percent_cols <- c("team1_accurate_passes", "team1_accurate_long_balls", "team1_accurate_crosses", 
+                  "team1_tackles_won", "team1_successful_dribbles", "team2_accurate_passes", 
+                  "team2_accurate_long_balls", "team2_accurate_crosses", "team2_tackles_won", 
+                  "team2_successful_dribbles")
+
+kable( head(matches[, percent_cols]),caption = 'Part of Original Data')
+
+
+matches[percent_cols] <- lapply(matches[percent_cols], function(col) {
+  as.numeric(sub(".*\\((\\d+)%\\).*", "\\1", col)) / 100
+})
+
+
+kable( head(matches[, percent_cols]),caption = 'Part of Adjusted Data')
+```
+
+Since some variables are a combination of counts and percentages, we decided that retaining only the percentage is sufficient for comparison. Therefore, we processed these variables by extracting the percentage part and converting it into numerical format.
+
+# Visualization
+## Q1 Score Distribution Curve
+
+```{r,message=F,warning=F}
+
+ggplot(matches, aes(x = team1_goals)) +
+  geom_density(fill = "blue", alpha = 0.5) +
+  labs(title = "Density Plot of Home Team Goals", x = "Home Team Goals", y = "Density") +
+  theme_minimal()
+
+
+ggplot(matches, aes(x = team2_goals)) +
+  geom_density(fill = "red", alpha = 0.5) +
+  labs(title = "Density Plot of Away Team Goals", x = "Away Team Goals", y = "Density") +
+  theme_minimal()
+
+```
+
+We plotted the score distribution curves for home and away teams. Generally, the highest peak is at 1 goal, indicating that scoring a single goal is most common. However, there is a slight difference: the probability density of the home team scoring 0 goals is about 0.25, while for the away team, it is around 0.4. This suggests that the home team has a lower probability of not scoring, possibly due to a home-field advantage.
+
+
+## Q2 Comparison of Shot Counts for Winning Teams as Home and Away Teams
+
+```{r,message=F,warning=F}
+
+boxplot_data1 <- matches %>%
+  filter(winner != "Draw") %>% 
+  mutate(winner_type = ifelse(winner == team1, "Home", "Away")) %>% 
+  select(team1_total_shots, winner_type) 
+
+
+ggplot(boxplot_data1, aes(x = winner_type, y = team1_total_shots, fill = winner_type)) +
+  geom_boxplot(outlier.color = "red", outlier.size = 2) +
+  labs(
+    title = "Total Shots by Home Team vs Winning Team Type",
+    x = "Winning Team Type",
+    y = "Total Shots by Home Team",
+    fill = "Winning Team Type"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+boxplot_data2 <- matches %>%
+  filter(winner != "Draw") %>% 
+  mutate(winner_type = ifelse(winner == team2, "Home", "Away")) %>% 
+  select(team2_total_shots, winner_type) 
+
+
+ggplot(boxplot_data2, aes(x = winner_type, y = team2_total_shots, fill = winner_type)) +
+  geom_boxplot(outlier.color = "red", outlier.size = 2) +
+  labs(
+    title = "Total Shots by Away Team vs Winning Team Type",
+    x = "Winning Team Type",
+    y = "Total Shots by Away Team",
+    fill = "Winning Team Type"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+We aimed to examine the difference in the number of shots between the two teams when either the home or away team wins. To do so, we created box plots. The results show that regardless of whether the home or away team wins, the home team generally has a higher number of shots. In matches where the home team wins, their shot count is significantly higher than the away team. Even in matches where the away team wins, the home team’s shot count is slightly higher than the away team’s.
+
+## Q3 Scatterplot of Duels Won vs Total Shots (Home Team Wins)
+
+```{r,message=F,warning=F}
+
+scatter_data <- matches %>%
+  filter(winner == team1) %>% 
+  select(team1_duels_won, team1_total_shots) 
+
+# 绘制散点图
+ggplot(scatter_data, aes(x = team1_duels_won, y = team1_total_shots)) +
+  geom_point(color = "blue", alpha = 0.7, size = 3) +
+  geom_smooth(method = "lm", se = FALSE, color = "red", linetype = "dashed") + 
+  labs(
+    title = "Duels Won vs Total Shots (Home Team Wins)",
+    x = "Duels Won by Home Team",
+    y = "Total Shots by Home Team"
+  ) +
+  theme_minimal()
+
+```
+
+In home team matches, there is an intrinsic correlation between the number of duels won and total shots. We found that in matches where the home team wins, the number of duels won is positively correlated with total shots. This may be related to the fact that players tend to be more excited and motivated when playing at home.
+
+## Q4 Comparison of Accurate Passes between Winning and Losing Teams
+
+```{r,message=F,warning=F}
+
+matches$winner_accurate_passes <- ifelse(matches$winner_type == "Home", matches$team1_accurate_passes, 
+                                         ifelse(matches$winner_type == "Away", matches$team2_accurate_passes, 1))
+
+matches$loser_accurate_passes <- ifelse(matches$winner_type == "Home", matches$team2_accurate_passes, 
+                                        ifelse(matches$winner_type == "Away", matches$team1_accurate_passes, 1))
+
+
+
+
+plot_data <- matches %>%
+  select(winner_accurate_passes, loser_accurate_passes) %>%
+  pivot_longer(
+    cols = c(winner_accurate_passes, loser_accurate_passes),
+    names_to = "Result",
+    values_to = "Accurate_Passes"
+  ) %>%
+  mutate(Result = ifelse(Result == "winner_accurate_passes", "Winner", "Loser"))
+
+ggplot(plot_data, aes(x = Result, y = Accurate_Passes, fill = Result)) +
+  geom_boxplot(outlier.color = "red", outlier.shape = 16, outlier.size = 2) +
+  labs(
+    title = "AccuratePasses-Winning vs Losing",
+    x = "Result",
+    y = "Accurate Passes (as a proportion)"
+  ) +
+  scale_fill_manual(values = c("Winner" = "lightblue", "Loser" = "pink")) +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 12)
+  )
+
+
+```
+
+We visualized the difference in the proportion of successful passes between the winning and losing teams. We found that the difference in the proportion of successful passes between the winning and losing teams is relatively small, which also reflects that the participating teams have solid fundamental skills.
+
+## Q5 Logistic Regression Modeling for Classification
+```{r,message=F,warning=F}
+matches <- matches %>% 
+  mutate(
+    HomeResult = case_when(
+      team1_goals > team2_goals ~ "Win",
+      team1_goals == team2_goals ~ "Draw",
+      team1_goals < team2_goals ~ "Lose"
+    )
+  )
+
+
+matches_glm= matches[,- which(colnames(matches) %in% c("match_number","team1","team2","date_of_match","stadium","winner","winner_type"))]
+# matches_glm= matches_glm[-which(matches_glm$HomeResult=='Draw'),]
+# Factor
+matches_glm$HomeResult <- as.factor(matches_glm$HomeResult)
+
+set.seed(222)
+train_indices <- sample(nrow(matches_glm), 0.8 * nrow(matches_glm))
+train_data <- matches_glm[train_indices, ]
+test_data <- matches_glm[-train_indices, ]
+
+logistic_model <- multinom(HomeResult ~ ., data = train_data)
+
+# predicted_prob <- predict(logistic_model, newdata = test_data, type = "response")
+
+# predicted
+test_pred <- predict(logistic_model, newdata = test_data)
+
+# confusionMatrix
+conf_matrix <- confusionMatrix(test_pred, test_data$HomeResult)
+conf_matrix
+
+```
+
+We used the multinom() method from the nnet package mentioned in the course materials to build a multinomial logistic regression model. The data was randomly split into a training set (80%) and a test set (20%) for model training and testing.
+
+The outcome variable is whether the team wins, with other match statistics as predictors.
+
+In the confusion matrix for the test set, we observed an overall prediction accuracy of 0.54, which is already a good accuracy for a three-class problem (for a binary classification, an accuracy only 0.04 higher than 0.5 would be considered poor).
+
+Additionally, we noticed a pattern: in the test set, the correct prediction rate for draws was 1/3 = 0.33, for losing matches was 1/2 = 0.5, and for winning matches was 3/5 = 0.6. This suggests that the model performs poorly on predicting draws, has an average performance for predicting losses, but performs better on predicting wins.
+
+
+
+## Top 10 Winning Factors Importance (Supplementary)
+
+```{r,message=F,warning=F}
+matches_glm= matches[,- which(colnames(matches) %in% c("match_number","team1","team2","date_of_match","stadium","winner","winner_type"))]
+
+matches_glm$HomeResult <- as.factor(matches_glm$HomeResult)
+
+set.seed(123) 
+rf_model <- randomForest(HomeResult ~ ., data = matches_glm, importance = TRUE)
+
+var_imp <- importance(rf_model)
+var_imp_df <- data.frame(
+  Variable = rownames(var_imp),
+  Importance = var_imp[, 3] 
+)
+
+top10_var_imp <- var_imp_df[order(-var_imp_df$Importance), ][1:10, ]
+
+ggplot(top10_var_imp, aes(x = reorder(Variable, Importance), y = Importance)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  coord_flip() + 
+  labs(
+    title = "Top 10 Important Variables",
+    x = "Variable",
+    y = "Importance"
+  ) +
+  theme_minimal()
+
+```
+
+Based on the feature importance ranking from the random forest model, we found that the most influential statistical factors in determining the outcome of a match are the scores of both teams, the proportion of successful passes, as well as factors like the number of shots, shots on target, and successful defensive actions. These factors are related to team coordination, scoring ability, passing fundamentals, and so on. Therefore, it can be concluded that in order to win a football match, both the management and the players need to focus on strengthening these abilities through training, which will increase the probability of winning.
+
+
